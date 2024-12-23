@@ -1,0 +1,35 @@
+{
+  "name": "onlylovers",
+  "version": "1.0.0",
+  "description": "",
+  "main": "init.js",
+  "scripts": {
+    "start": "pm2-runtime start init.js",
+    "origin": "node init.js",
+    "dev": "nodemon init.js",
+    "begin": ""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.6.2",
+    "dotenv": "^16.4.5",
+    "fs": "^0.0.1-security",
+    "geolib": "^3.3.4",
+    "mariadb": "^3.2.0",
+    "node-cron": "^3.0.3",
+    "node-emoji": "^2.1.0",
+    "node-fetch": "^2.7.0",
+    "pm2": "^5.3.1",
+    "telegraf": "^4.16.1",
+    "telegraf-better-stage": "^1.0.1",
+    "telegram-bot-api": "^2.0.1",
+    "util": "^0.12.5",
+    "winston": "^3.10.0"
+  },
+  "devDependencies": {
+    "jest": "^29.6.4",
+    "nodemon": "^2.0.12"
+  }
+}
