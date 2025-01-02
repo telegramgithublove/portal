@@ -3,7 +3,7 @@
 //     database: 'beautybase',
 //     user: 'root',
 //     password: '',
-//
+
 // };
 
 const dbConfig = {
