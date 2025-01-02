@@ -149,23 +149,23 @@ function createScenes(bot) {
             conn = await db.getConnection();
             
             // Проверяем существование пользователя
-            const [users] = await conn.query(
+            const [result] = await conn.execute(
                 'SELECT * FROM users WHERE telegram_id = ?',
                 [userId]
             );
 
-            if (users.length === 0) {
+            if (!result || result.length === 0) {
                 // Создаем нового пользователя
-                await conn.query(
+                await conn.execute(
                     'INSERT INTO users (telegram_id, gender, username) VALUES (?, ?, ?)',
-                    [userId, gender, ctx.from.username]
+                    [userId, gender, ctx.from.username || '']
                 );
                 console.log('Создан новый пользователь:', { userId, gender, username: ctx.from.username });
             } else {
                 // Обновляем существующего пользователя
-                await conn.query(
+                await conn.execute(
                     'UPDATE users SET gender = ?, username = ? WHERE telegram_id = ?',
-                    [gender, ctx.from.username, userId]
+                    [gender, ctx.from.username || '', userId]
                 );
                 console.log('Обновлен существующий пользователь:', { userId, gender, username: ctx.from.username });
             }
@@ -197,23 +197,23 @@ function createScenes(bot) {
             conn = await db.getConnection();
             
             // Проверяем существование пользователя
-            const [users] = await conn.query(
+            const [result] = await conn.execute(
                 'SELECT * FROM users WHERE telegram_id = ?',
                 [userId]
             );
 
-            if (users.length === 0) {
+            if (!result || result.length === 0) {
                 // Создаем нового пользователя
-                await conn.query(
+                await conn.execute(
                     'INSERT INTO users (telegram_id, gender, username) VALUES (?, ?, ?)',
-                    [userId, gender, ctx.from.username]
+                    [userId, gender, ctx.from.username || '']
                 );
                 console.log('Создан новый пользователь:', { userId, gender, username: ctx.from.username });
             } else {
                 // Обновляем существующего пользователя
-                await conn.query(
+                await conn.execute(
                     'UPDATE users SET gender = ?, username = ? WHERE telegram_id = ?',
-                    [gender, ctx.from.username, userId]
+                    [gender, ctx.from.username || '', userId]
                 );
                 console.log('Обновлен существующий пользователь:', { userId, gender, username: ctx.from.username });
             }
@@ -405,7 +405,47 @@ function createScenes(bot) {
         await ctx.reply('Введите название города или первые 3-4 буквы для поиска 🔍');
     });
 
-    cityScene.action(/^city_select_(.+)$/, async (ctx) => {
+    cityScene.on('text', async (ctx) => {
+        const searchQuery = ctx.message.text.trim();
+
+        if (!searchQuery) {
+            await ctx.reply('Пожалуйста, введите название города:');
+            return;
+        }
+
+        try {
+            // Читаем файл с городами
+            const cities = await fs.readFile(path.join(__dirname, 'city', 'cities.json'), 'utf8');
+            
+            // Ищем города, которые содержат введенный текст
+            const citiesData = JSON.parse(cities);
+            const matchedCities = citiesData.filter(city => 
+                city.name.toLowerCase().includes(searchQuery.toLowerCase())
+            ).slice(0, 10); // Берем только первые 10 результатов
+
+            // Создаем клавиатуру с найденными городами
+            const keyboard = {
+                reply_markup: {
+                    inline_keyboard: matchedCities.map(city => [{
+                        text: city.name,
+                        callback_data: `city_${city.name}`
+                    }])
+                }
+            };
+
+            if (matchedCities.length === 0) {
+                await ctx.reply('Города не найдены. Попробуйте другой запрос.');
+            } else {
+                await ctx.reply('Выберите город из списка:', keyboard);
+            }
+
+        } catch (error) {
+            console.error('Ошибка при поиске городов:', error);
+            await ctx.reply('Произошла ошибка при поиске городов. Пожалуйста, попробуйте еще раз.');
+        }
+    });
+
+    cityScene.action(/^city_(.+)$/, async (ctx) => {
         const selectedCity = ctx.match[1];
         const telegramId = ctx.from.id;
         try {
@@ -422,55 +462,6 @@ function createScenes(bot) {
             console.error('Ошибка при сохранении города:', error);
             await ctx.reply('Произошла ошибка при сохранении города. Пожалуйста, попробуйте еще раз.');
             return ctx.scene.reenter();
-        }
-    });
-
-    cityScene.on('text', async (ctx) => {
-        const searchQuery = ctx.message.text.trim();
-        
-        if (searchQuery === 'Вернуться в главное меню') {
-            return ctx.scene.enter('menu');
-        }
-
-        if (searchQuery.length < 3) {
-            await ctx.reply('Пожалуйста, введите минимум 3 буквы для поиска города');
-            return;
-        }
-
-        try {
-            // Читаем файл с городами
-            const cities = await fs.readFile(path.join(__dirname, 'city', 'cities.json'), 'utf8');
-            
-            // Ищем города, которые содержат введенный текст
-            const matchedCities = JSON.parse(cities).filter(city => 
-                city.name.toLowerCase().includes(searchQuery.toLowerCase())
-            ).slice(0, 10); // Берем только первые 10 результатов
-
-    
-
-            // Создаем клавиатуру с найденными городами
-            const keyboard = matchedCities.map(city => [{
-                text: city.name,
-                callback_data: `city_select_${city.name}`
-            }]);
-
-            // Добавляем кнопку возврата в главное меню
-            keyboard.push([{
-                text: 'Вернуться в главное меню',
-                callback_data: 'back_to_menu'
-            }]);
-
-            await ctx.reply(
-                'Выберите город из списка:',
-                {
-                    reply_markup: {
-                        inline_keyboard: keyboard
-                    }
-                }
-            );
-        } catch (error) {
-            console.error('Ошибка при поиске города:', error);
-            await ctx.reply('Произошла ошибка при поиске города. Пожалуйста, попробуйте еще раз.');
         }
     });
 
