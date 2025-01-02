@@ -7,19 +7,93 @@ const { insertOrUpdateGenderSearch } = require('./insertOrUpdateGender')
 const { insertCityForUser } = require('./city/insertCityForUser');
 const { showProfile } = require('./profiles/showProfile.js');
 const path = require('path');
-const fs = require('fs').promises;
+const fs = require('node:fs').promises;
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
-// Создаем директорию для загрузок, если она не существует
+// Создаем необходимые директории
 const downloadsDir = path.join(__dirname, 'downloads');
+const uploadsDir = path.join(__dirname, 'uploads');
+
 (async () => {
     try {
+        await fs.access(downloadsDir);
+    } catch {
         await fs.mkdir(downloadsDir, { recursive: true });
-        console.log('Директория для загрузок создана или уже существует:', downloadsDir);
-    } catch (error) {
-        console.error('Ошибка при создании директории для загрузок:', error);
+        console.log('Создана директория:', downloadsDir);
+    }
+
+    try {
+        await fs.access(uploadsDir);
+    } catch {
+        await fs.mkdir(uploadsDir, { recursive: true });
+        console.log('Создана директория:', uploadsDir);
     }
 })();
+
+// Загружаем список городов с координатами
+let citiesData = [];
+(async () => {
+    try {
+        const citiesPath = path.join(__dirname, 'city', 'cities.json');
+        console.log('Загрузка списка городов из:', citiesPath);
+        const data = await fs.readFile(citiesPath, 'utf8');
+        citiesData = JSON.parse(data);
+        console.log('Загружено городов:', citiesData.length);
+    } catch (error) {
+        console.error('Ошибка при загрузке списка городов:', error);
+    }
+})();
+
+// Функция для вычисления расстояния между городами (в км)
+function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371; // Радиус Земли в километрах
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+        Math.sin(dLat/2) * Math.sin(dLat/2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+        Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+}
+
+// Функция для получения координат города
+function getCityCoordinates(cityName) {
+    const city = citiesData.find(city => 
+        city.name.toLowerCase() === cityName.toLowerCase()
+    );
+    
+    if (city) {
+        return {
+            lat: parseFloat(city.coords.lat),
+            lon: parseFloat(city.coords.lon),
+            name: city.name
+        };
+    }
+    return null;
+}
+
+// Функция для получения ближайших городов
+function getNearestCities(cityName, maxDistance = 50) {
+    const sourceCity = getCityCoordinates(cityName);
+    if (!sourceCity) return [];
+
+    return citiesData
+        .map(city => {
+            const distance = calculateDistance(
+                sourceCity.lat, 
+                sourceCity.lon,
+                parseFloat(city.coords.lat),
+                parseFloat(city.coords.lon)
+            );
+            return {
+                name: city.name,
+                distance
+            };
+        })
+        .filter(city => city.distance <= maxDistance && city.name !== sourceCity.name)
+        .sort((a, b) => a.distance - b.distance);
+}
 
 function createScenes(bot) {
 
@@ -34,6 +108,7 @@ function createScenes(bot) {
     const goalScene = new Scenes.BaseScene('goal');
     const mediaScene = new Scenes.BaseScene('mediaScene');
     const endScene = new Scenes.BaseScene('end');
+    const findProfilesScene = new Scenes.BaseScene('findProfiles');
 
     firstQuestionScene.enter(async (ctx) => {
         let text = 'Что бы составить анкету. Вам нужно ответить на несколько небольших вопросов  💯  : ';
@@ -364,17 +439,14 @@ function createScenes(bot) {
 
         try {
             // Читаем файл с городами
-            const cities = require('./city/cities.json');
+            const cities = await fs.readFile(path.join(__dirname, 'city', 'cities.json'), 'utf8');
             
             // Ищем города, которые содержат введенный текст
-            const matchedCities = cities.filter(city => 
+            const matchedCities = JSON.parse(cities).filter(city => 
                 city.name.toLowerCase().includes(searchQuery.toLowerCase())
             ).slice(0, 10); // Берем только первые 10 результатов
 
-            if (matchedCities.length === 0) {
-                await ctx.reply('Города не найдены. Попробуйте другой запрос.');
-                return;
-            }
+    
 
             // Создаем клавиатуру с найденными городами
             const keyboard = matchedCities.map(city => [{
@@ -489,7 +561,7 @@ function createScenes(bot) {
             let conn;
             try {
                 conn = await db.getConnection();
-                await conn.query(
+                await conn.execute(
                     'UPDATE users SET search = ? WHERE telegram_id = ?',
                     [search, ctx.from.id]
                 );
@@ -785,7 +857,9 @@ function createScenes(bot) {
         infoScene,
         searchScene,
         goalScene,
-        mediaScene
+        mediaScene,
+        endScene,
+        findProfilesScene
     ];
 
     scenes.forEach(scene => {
@@ -804,6 +878,133 @@ function createScenes(bot) {
         });
     });
 
+    findProfilesScene.enter(async (ctx) => {
+        let conn;
+        try {
+            conn = await db.getConnection();
+            
+            // Получаем город текущего пользователя
+            const [currentUser] = await conn.execute(
+                'SELECT city FROM users WHERE telegram_id = ?',
+                [ctx.from.id]
+            );
+
+            if (!currentUser || !currentUser[0] || !currentUser[0].city) {
+                await ctx.reply('Пожалуйста, сначала укажите свой город в анкете.');
+                return;
+            }
+
+            const userCity = currentUser[0].city;
+            console.log('Поиск пользователей рядом с городом:', userCity);
+
+            // Получаем список ближайших городов
+            const nearestCities = getNearestCities(userCity);
+            const cityNames = [userCity, ...nearestCities.map(c => c.name)];
+            
+            console.log('Поиск пользователей в городах:', cityNames);
+
+            // Получаем пользователей из ближайших городов
+            const [users] = await conn.execute(
+                'SELECT * FROM users WHERE showProfile = 1 AND city IN (?)',
+                [cityNames]
+            );
+
+            if (!users || users.length === 0) {
+                await ctx.reply('К сожалению, сейчас нет анкет поблизости 😔');
+                return;
+            }
+
+            // Добавляем информацию о расстоянии
+            const userCityCoords = getCityCoordinates(userCity);
+            const usersWithDistance = users.map(user => {
+                const cityCoords = getCityCoordinates(user.city);
+                let distance = Infinity;
+                
+                if (cityCoords && userCityCoords) {
+                    distance = calculateDistance(
+                        userCityCoords.lat,
+                        userCityCoords.lon,
+                        cityCoords.lat,
+                        cityCoords.lon
+                    );
+                }
+                
+                return { ...user, distance };
+            }).sort((a, b) => a.distance - b.distance);
+
+            ctx.session.currentUserIndex = 0;
+            ctx.session.users = usersWithDistance;
+
+            // Показываем первую анкету
+            await showNextProfile(ctx);
+
+        } catch (error) {
+            console.error('Ошибка при поиске анкет:', error);
+            await ctx.reply('Произошла ошибка при поиске анкет. Пожалуйста, попробуйте позже.');
+        } finally {
+            if (conn) await conn.release();
+        }
+    });
+
+    async function showNextProfile(ctx) {
+        if (!ctx.session.users || !ctx.session.users[ctx.session.currentUserIndex]) {
+            await ctx.reply('Больше анкет нет 😔');
+            return;
+        }
+
+        const user = ctx.session.users[ctx.session.currentUserIndex];
+        const distance = Math.round(user.distance);
+        
+        const caption = `👤 Анкета:\n\n` +
+            `👤 Имя: ${user.name}\n` +
+            `🌎 Город: ${user.city} (${distance} км)\n` +
+            `📓 Возраст: ${user.age}\n` +
+            `📬 О себе: ${user.info}\n` +
+            `🔍 Пол: ${user.gender}\n` +
+            `☀ Интересы: ${user.search}\n` +
+            `💕 Цель знакомства: ${user.goal}`;
+
+        const keyboard = [
+            [
+                { text: '👎 Пропустить', callback_data: 'next_profile' },
+                { text: '❤️ Написать', callback_data: `write_${user.telegram_id}` }
+            ]
+        ];
+
+        if (user.fileId) {
+            try {
+                await ctx.replyWithPhoto(user.fileId, {
+                    caption,
+                    reply_markup: { inline_keyboard: keyboard }
+                });
+            } catch (error) {
+                console.error('Ошибка при отправке фото:', error);
+                await ctx.reply(caption, {
+                    reply_markup: { inline_keyboard: keyboard }
+                });
+            }
+        } else {
+            await ctx.reply(caption, {
+                reply_markup: { inline_keyboard: keyboard }
+            });
+        }
+    }
+
+    // Обработка нажатия кнопок в анкете
+    findProfilesScene.action('next_profile', async (ctx) => {
+        ctx.session.currentUserIndex++;
+        await showNextProfile(ctx);
+    });
+
+    findProfilesScene.action(/^write_(\d+)$/, async (ctx) => {
+        const targetUserId = ctx.match[1];
+        // Здесь можно добавить логику для начала диалога с пользователем
+        await ctx.reply(`Вы хотите написать пользователю с ID: ${targetUserId}`);
+    });
+
+    // Добавляем команду для поиска анкет
+    bot.command('search', (ctx) => ctx.scene.enter('findProfiles'));
+
     const Stage = new Scenes.Stage([
         firstQuestionScene,
         secondQuestionScene,
@@ -815,7 +1016,8 @@ function createScenes(bot) {
         searchScene,
         goalScene,
         mediaScene,
-        endScene
+        endScene,
+        findProfilesScene
     ]);
 
     bot.use(Stage.middleware());
